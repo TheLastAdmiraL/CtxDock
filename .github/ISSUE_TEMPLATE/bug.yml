@@ -1,0 +1,28 @@
+name: Bug report
+description: Report a reproducible CtxDock problem without private memory data.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Do not paste secrets or personal records.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: CtxDock and Python versions
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Linux, Other]
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Minimal reproduction
+    validations:
+      required: true
+

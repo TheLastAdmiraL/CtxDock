@@ -1,0 +1,12 @@
+{
+  "title": "Database choice",
+  "summary": "Use PostgreSQL for relational application data.",
+  "category": "architecture",
+  "rationale": "The domain has strongly related entities and transactional updates.",
+  "tags": ["database", "backend"],
+  "scope": "project",
+  "source": {
+    "agent": "codex",
+    "reference": null
+  }
+}
