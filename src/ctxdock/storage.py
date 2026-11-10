@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
 import shutil
@@ -64,6 +65,35 @@ def _atomic_json(path: Path, value: Any) -> None:
         raise
 
 
+@contextmanager
+def _file_lock(lock_path: Path):
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+b") as handle:
+        fd = handle.fileno()
+        if os.name == "nt":
+            import msvcrt
+            handle.seek(0)
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+
+
 class Store:
     def __init__(self, home: Path | None = None):
         self.home = (home or default_home()).expanduser().resolve()
@@ -98,18 +128,30 @@ class Store:
             raise RuntimeError(f"Invalid configuration: {exc}") from exc
         return {**DEFAULT_CONFIG, **value}
 
-    def project(self, explicit_id: str | None = None, cwd: Path | None = None) -> dict[str, Any]:
+    def resolve_project(self, explicit_id: str | None = None, cwd: Path | None = None) -> dict[str, Any]:
+        return resolve_project(self.home, explicit_id, cwd)
+
+    def register_project(self, explicit_id: str | None = None, cwd: Path | None = None) -> dict[str, Any]:
         project = resolve_project(self.home, explicit_id, cwd)
         path = self.home / "projects.json"
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            data = {"version": 1, "projects": {}}
-        projects = data.setdefault("projects", {})
-        if project["id"] not in projects:
-            projects[project["id"]] = {"name": project["name"], "root": project["root"], "created_at": utc_now()}
-            _atomic_json(path, data)
+        lock_path = self.home / ".projects.lock"
+        with _file_lock(lock_path):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                data = {"version": 1, "projects": {}}
+            projects = data.setdefault("projects", {})
+            if project["id"] not in projects or projects[project["id"]].get("root") != project["root"]:
+                projects[project["id"]] = {
+                    "name": project["name"],
+                    "root": project["root"],
+                    "created_at": projects.get(project["id"], {}).get("created_at") or utc_now(),
+                }
+                _atomic_json(path, data)
         return project
+
+    def project(self, explicit_id: str | None = None, cwd: Path | None = None) -> dict[str, Any]:
+        return self.resolve_project(explicit_id, cwd)
 
     def _record_path(self, record: dict[str, Any]) -> Path:
         bucket = "shared" if record["scope"] == "shared" else safe_component(record["project_id"], "project ID")
@@ -118,7 +160,7 @@ class Store:
 
     def save(self, data: dict[str, Any], project_id: str | None = None, cwd: Path | None = None) -> tuple[dict[str, Any], list[str]]:
         self.require_init()
-        project = self.project(project_id or data.get("project_id"), cwd)
+        project = self.register_project(project_id or data.get("project_id"), cwd)
         record, warnings = make_record(data, project["id"])
         path = self._record_path(record)
         with index.connect(self.db_path) as conn:
@@ -166,7 +208,7 @@ class Store:
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
         self.require_init()
-        project = self.project(project_id, cwd)
+        project = self.resolve_project(project_id, cwd)
         if status and status not in VALID_STATUSES:
             raise ValueError("Invalid status filter.")
         limit = limit or int(self.config()["default_result_limit"])
@@ -184,7 +226,7 @@ class Store:
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         self.require_init()
-        project = self.project(project_id, cwd)
+        project = self.resolve_project(project_id, cwd)
         clauses: list[str] = []
         params: list[Any] = []
         if not cross_project:
@@ -296,6 +338,7 @@ class Store:
         summary = "\n".join(f"{key.replace('_', ' ').title()}: {data[key]}" for key in fields if data.get(key))
         if not summary:
             raise ValueError("A handoff needs at least one handoff field.")
+        latest = self.handoff(None, project_id, cwd)
         record, _warnings = self.save({
             "title": data.get("title", "Agent handoff"),
             "summary": summary,
@@ -303,6 +346,7 @@ class Store:
             "category": "handoff",
             "tags": data.get("tags", ["handoff"]),
             "source": data.get("source", {}),
+            "supersedes": data.get("supersedes") or (latest["id"] if latest else None),
         }, project_id, cwd)
         return record
 
@@ -346,28 +390,41 @@ class Store:
         checks["skill"] = {"ok": (target / "SKILL.md").is_file(), "detail": str(target)}
         return checks, all(item["ok"] for item in checks.values())
 
-    def stats(self, project_id: str | None = None, cwd: Path | None = None) -> dict[str, Any]:
+    def stats(self, project_id: str | None = None, cwd: Path | None = None, cross_project: bool = False) -> dict[str, Any]:
         self.require_init()
-        project = self.project(project_id, cwd)
+        project = self.resolve_project(project_id, cwd)
         with index.connect(self.db_path) as conn:
-            total = conn.execute("SELECT count(*) FROM records").fetchone()[0]
-            groups = {row[0]: row[1] for row in conn.execute("SELECT project_id, count(*) FROM records GROUP BY project_id")}
-            samples = [row[0] for row in conn.execute("SELECT title FROM records ORDER BY updated_at DESC LIMIT 10")]
+            if cross_project:
+                total = conn.execute("SELECT count(*) FROM records").fetchone()[0]
+                groups = {row[0]: row[1] for row in conn.execute("SELECT project_id, count(*) FROM records GROUP BY project_id")}
+                samples = [row[0] for row in conn.execute("SELECT title FROM records ORDER BY updated_at DESC LIMIT 10")]
+            else:
+                total = conn.execute(
+                    "SELECT count(*) FROM records WHERE project_id = ? OR scope = 'shared'",
+                    (project["id"],),
+                ).fetchone()[0]
+                groups = None
+                samples = [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT title FROM records WHERE project_id = ? OR scope = 'shared' ORDER BY updated_at DESC LIMIT 10",
+                        (project["id"],),
+                    )
+                ]
         latencies: list[float] = []
         output_sizes: list[int] = []
         for sample in samples:
             start = time.perf_counter()
             try:
-                output = json.dumps(self.find(sample, project["id"], cross_project=True, limit=3))
+                output = json.dumps(self.find(sample, project["id"], cross_project=cross_project, limit=3))
             except ValueError:
                 output = "[]"
             latencies.append((time.perf_counter() - start) * 1000)
             output_sizes.append(len(output.encode("utf-8")))
         storage_size = sum(path.stat().st_size for path in self.home.rglob("*") if path.is_file())
         avg_bytes = statistics.mean(output_sizes) if output_sizes else 0
-        return {
+        data: dict[str, Any] = {
             "total_records": total,
-            "records_by_project": groups,
             "database_bytes": self.db_path.stat().st_size,
             "storage_bytes": storage_size,
             "sample_search_latency_ms": round(statistics.mean(latencies), 3) if latencies else None,
@@ -376,6 +433,9 @@ class Store:
             "token_estimate_note": "Character-based estimate (bytes / 4), not model-reported usage.",
             "ctxdock_version": __version__,
         }
+        if cross_project:
+            data["records_by_project"] = groups
+        return data
 
 
 def bounded_json(value: Any, max_chars: int) -> str:

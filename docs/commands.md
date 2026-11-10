@@ -11,7 +11,7 @@ Every command supports `--help`. Errors go to standard error and return exit cod
 - `ctxdock handoff`: with JSON, save current goal, completed work, decisions, files, blockers, and next actions; without JSON, return the newest active project handoff.
 - `ctxdock rebuild`: reconstruct the index from JSON. A corrupt database is moved under `backups/` first.
 - `ctxdock doctor`: check Python, home, database, FTS5, readable records, and skill installation.
-- `ctxdock stats`: report local counts, bytes, sample latency, output size, and explicitly estimated tokens.
+- `ctxdock stats [--cross-project]`: report local counts, bytes, sample latency, output size, and explicitly estimated tokens. Project-scoped by default; use `--cross-project` to view global statistics and per-project breakdown.
 - `ctxdock install-skill` / `uninstall-skill`: manage only the agent skill files.
 
 Statuses are `active`, `superseded`, and `archived`. Scopes are `project` and `shared`. Saving a record with `supersedes` marks the referenced indexed record superseded.

@@ -92,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     stats = sub.add_parser("stats", help="Display local storage and retrieval statistics")
     _common_project(stats)
+    stats.add_argument("--cross-project", action="store_true", help="Include all projects in statistics")
 
     install = sub.add_parser("install-skill", help="Install the Codex skill at user level")
     install.add_argument("--target", type=Path)
@@ -143,7 +144,7 @@ def run(args: argparse.Namespace) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if ok else 1
     elif command == "stats":
-        result = store.stats(args.project)
+        result = store.stats(args.project, cross_project=args.cross_project)
     elif command == "install-skill":
         result = {"installed": str(install_skill(args.target, args.upgrade)), "memories_preserved": True}
     elif command == "uninstall-skill":

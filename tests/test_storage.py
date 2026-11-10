@@ -621,6 +621,94 @@ class SearchRankingAndDeduplicationTests(unittest.TestCase):
         self.assertEqual(results[1]["status"], "superseded")
 
 
+class HandoffAndProjectPrivacyTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = TempHome()
+        self.store = Store(self.temp.path)
+        self.store.init()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_new_handoff_supersedes_previous(self):
+        h1 = self.store.handoff({"current_goal": "Goal 1", "blockers": ["b1"]}, "alpha")
+        h2 = self.store.handoff({"current_goal": "Goal 2", "blockers": ["b2"]}, "alpha")
+        h3 = self.store.handoff({"current_goal": "Goal 3", "blockers": ["b3"]}, "alpha")
+
+        self.assertEqual(self.store.get(h1["id"])["status"], "superseded")
+        self.assertEqual(self.store.get(h2["id"])["status"], "superseded")
+        h3_loaded = self.store.get(h3["id"])
+        self.assertEqual(h3_loaded["status"], "active")
+        self.assertEqual(h3_loaded["supersedes"], h2["id"])
+
+        active_handoffs = self.store.list_records("alpha", category="handoff", status="active")
+        self.assertEqual(len(active_handoffs), 1)
+        self.assertEqual(active_handoffs[0]["id"], h3["id"])
+
+    def test_handoffs_do_not_cross_projects(self):
+        h_alpha = self.store.handoff({"current_goal": "Alpha Goal"}, "alpha")
+        h_beta = self.store.handoff({"current_goal": "Beta Goal"}, "beta")
+
+        latest_alpha = self.store.handoff(None, "alpha")
+        latest_beta = self.store.handoff(None, "beta")
+
+        self.assertEqual(latest_alpha["id"], h_alpha["id"])
+        self.assertEqual(latest_alpha["status"], "active")
+        self.assertEqual(latest_beta["id"], h_beta["id"])
+        self.assertEqual(latest_beta["status"], "active")
+
+    def test_find_does_not_modify_projects_registry(self):
+        projects_file = self.temp.path / "projects.json"
+        before = json.loads(projects_file.read_text(encoding="utf-8"))
+        self.store.find("nonexistent", "unregistered-query-project")
+        after = json.loads(projects_file.read_text(encoding="utf-8"))
+        self.assertNotIn("unregistered-query-project", after["projects"])
+        self.assertEqual(before, after)
+
+    def test_list_does_not_modify_projects_registry(self):
+        projects_file = self.temp.path / "projects.json"
+        before = json.loads(projects_file.read_text(encoding="utf-8"))
+        self.store.list_records("unregistered-list-project")
+        after = json.loads(projects_file.read_text(encoding="utf-8"))
+        self.assertNotIn("unregistered-list-project", after["projects"])
+        self.assertEqual(before, after)
+
+    def test_default_stats_are_project_scoped(self):
+        for i in range(3):
+            self.store.save({"title": f"Alpha {i}", "summary": f"Alpha summary {i}"}, "alpha")
+        for i in range(5):
+            self.store.save({"title": f"Beta {i}", "summary": f"Beta summary {i}"}, "beta")
+        self.store.save({"title": "Shared item", "summary": "Shared item summary", "scope": "shared"}, "gamma")
+
+        stats = self.store.stats("alpha")
+        self.assertEqual(stats["total_records"], 4)
+        self.assertNotIn("records_by_project", stats)
+
+    def test_cross_project_stats_are_explicit(self):
+        for i in range(2):
+            self.store.save({"title": f"Alpha {i}", "summary": f"Alpha summary {i}"}, "alpha")
+        for i in range(3):
+            self.store.save({"title": f"Beta {i}", "summary": f"Beta summary {i}"}, "beta")
+
+        stats = self.store.stats("alpha", cross_project=True)
+        self.assertEqual(stats["total_records"], 5)
+        self.assertIn("records_by_project", stats)
+        self.assertEqual(stats["records_by_project"].get("alpha"), 2)
+        self.assertEqual(stats["records_by_project"].get("beta"), 3)
+
+    def test_concurrent_project_registration_preserves_all_entries(self):
+        def register(idx):
+            self.store.register_project(f"concurrent-proj-{idx}")
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(register, range(20)))
+
+        projects_file = self.temp.path / "projects.json"
+        data = json.loads(projects_file.read_text(encoding="utf-8"))
+        for idx in range(20):
+            self.assertIn(f"concurrent-proj-{idx}", data["projects"])
+
+
 if __name__ == "__main__":
     unittest.main()
 
