@@ -173,6 +173,7 @@ class StorageTests(unittest.TestCase):
             self.assertIn("5 attempts", str(ctx.exception))
         self.assertEqual(json.loads(target.read_text(encoding="utf-8")), {"status": "original"})
 
+    @unittest.skipUnless(os.name == "nt", "Extended Windows paths are specific to Windows (NT)")
     def test_extended_windows_path_is_accepted(self):
         base = self.temp.path / "records"
         base.mkdir(parents=True, exist_ok=True)
@@ -181,6 +182,7 @@ class StorageTests(unittest.TestCase):
         result = ensure_within(base, extended_candidate)
         self.assertEqual(result.name, "child.json")
 
+    @unittest.skipUnless(os.name == "nt", "UNC paths are specific to Windows (NT)")
     def test_unc_path_is_normalized(self):
         unc_candidate = Path(r"\\?\UNC\server\share\records\file.json")
         normalized = _normalize_path(unc_candidate)
