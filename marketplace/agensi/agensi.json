@@ -1,0 +1,28 @@
+{
+  "name": "CtxDock",
+  "summary": "Local, selective project memory for coding agents. Save decisions, fixes, constraints, and handoffs, then retrieve only relevant context across sessions.",
+  "price": "Free",
+  "requires": [
+    "Python 3.11+",
+    "SQLite with FTS5",
+    "Agent with terminal and local filesystem access"
+  ],
+  "optional": [
+    "Git for automatic repository detection"
+  ],
+  "permissions": {
+    "terminal": true,
+    "read_files": true,
+    "write_files": true,
+    "environment_variables": true,
+    "browser": false,
+    "network_access": false
+  },
+  "connected_services": [],
+  "file_scopes": [
+    "~/.ctxdock/**",
+    "${CTXDOCK_HOME}/**"
+  ],
+  "compatibility_note": "Requires Python 3.11+ with SQLite FTS5 and an agent permitted to run shell commands and write local user storage. Codex is verified. Claude Code, Cursor, Gemini CLI, and VS Code Copilot support remains experimental.",
+  "documentation": "https://github.com/TheLastAdmiraL/CtxDock"
+}
