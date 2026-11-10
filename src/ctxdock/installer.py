@@ -12,9 +12,6 @@ def default_target() -> Path:
 
 
 def source_skill() -> Path:
-    repo_source = Path(__file__).resolve().parents[2] / "skill" / "ctxdock"
-    if (repo_source / "SKILL.md").is_file():
-        return repo_source
     return Path(str(resources.files("ctxdock").joinpath("_skill")))
 
 

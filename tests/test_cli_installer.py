@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import filecmp
 import io
 import json
 import os
 import sqlite3
+import subprocess
+import sys
+import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -86,6 +90,58 @@ class CliInstallerTests(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertIn("ctxdock: error: database is locked", err)
             self.assertNotIn("Traceback", err)
+
+    def test_skill_installation_from_source_and_wheel_matches_byte_for_byte(self):
+        root = Path(__file__).resolve().parents[1]
+        canonical_dir = root / "skill" / "ctxdock"
+
+        # 1. Install from current source checkout
+        target_source = self.temp.path / "skills_source" / "ctxdock"
+        install(target_source)
+        self.assertTrue((target_source / "SKILL.md").is_file())
+
+        # 2. Build a wheel in a temp directory
+        wheel_dir = self.temp.path / "wheels"
+        wheel_dir.mkdir(parents=True, exist_ok=True)
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "wheel", "--no-deps", "-w", str(wheel_dir), str(root)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, f"pip wheel failed: {proc.stderr}")
+        wheels = list(wheel_dir.glob("*.whl"))
+        self.assertEqual(len(wheels), 1)
+
+        # 3. Extract skill from wheel
+        target_wheel = self.temp.path / "skills_wheel" / "ctxdock"
+        target_wheel.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(wheels[0]) as z:
+            for member in z.namelist():
+                if member.startswith("ctxdock/_skill/"):
+                    rel = member[len("ctxdock/_skill/"):]
+                    if rel:
+                        dest = target_wheel / rel
+                        if member.endswith("/"):
+                            dest.mkdir(parents=True, exist_ok=True)
+                        else:
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            dest.write_bytes(z.read(member))
+
+        # 4. Compare installed skill files from source, wheel, and canonical byte-for-byte
+        source_files = {p.relative_to(target_source) for p in target_source.rglob("*") if p.is_file()}
+        wheel_files = {p.relative_to(target_wheel) for p in target_wheel.rglob("*") if p.is_file()}
+        canonical_files = {p.relative_to(canonical_dir) for p in canonical_dir.rglob("*") if p.is_file()}
+
+        self.assertEqual(source_files, wheel_files)
+        self.assertEqual(source_files, canonical_files)
+
+        for rel in sorted(source_files):
+            src_file = target_source / rel
+            whl_file = target_wheel / rel
+            canon_file = canonical_dir / rel
+            self.assertTrue(filecmp.cmp(src_file, whl_file, shallow=False), f"Drift between source and wheel in {rel}")
+            self.assertTrue(filecmp.cmp(src_file, canon_file, shallow=False), f"Drift between source and canonical in {rel}")
 
 
 if __name__ == "__main__":
