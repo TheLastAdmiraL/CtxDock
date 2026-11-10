@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
+from . import __version__
 from .installer import install as install_skill
 from .installer import uninstall as uninstall_skill
 from .security import SecurityError
@@ -45,7 +46,7 @@ def _positive_int(value: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ctxdock", description="Save what matters. Recall anywhere.")
     parser.add_argument("--home", type=Path, help="Override CTXDOCK_HOME for this command")
-    parser.add_argument("--version", action="version", version="ctxdock 0.1.0")
+    parser.add_argument("--version", action="version", version=f"ctxdock {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init", help="Initialize global storage safely")

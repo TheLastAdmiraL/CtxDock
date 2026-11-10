@@ -4,7 +4,7 @@
 
 CtxDock is a local-first Agent Skill for carrying curated project knowledge between coding-agent sessions. It stores decisions, constraints, fixes, and handoffs—not entire conversations—and retrieves a small ranked slice when an agent needs it. Ordinary storage and search use Python, JSON, SQLite FTS5, and zero model or network calls.
 
-CtxDock is an early, Codex-first MVP. Claude Code and Cursor instructions are experimental and have not yet been verified end to end.
+CtxDock is an early, Codex-first MVP. Claude Code, Cursor, Gemini CLI, and VS Code Copilot integrations remain experimental and have not yet been verified end to end.
 
 ## Why CtxDock
 
@@ -24,7 +24,7 @@ Coding agents have separate context windows. Re-pasting a long history is slow a
 Requires Python 3.11+ with SQLite FTS5 (included in normal Python distributions).
 
 ```console
-git clone <your-fork-or-checkout-url> ctxdock
+git clone https://github.com/TheLastAdmiraL/CtxDock.git ctxdock
 cd ctxdock
 python -m pip install .
 ctxdock init
@@ -105,7 +105,27 @@ Default searches return the current project plus records deliberately saved with
 └── backups/
 ```
 
-JSON is canonical; SQLite is rebuildable with `ctxdock rebuild`. Writes use temporary files, atomic replacement, SQLite transactions, WAL mode, and optimistic update checks.
+JSON is canonical; SQLite is rebuildable with `ctxdock rebuild`. Writes use temporary files, atomic replacement with automatic retry backoff (handling transient Windows `PermissionError` contention), SQLite transactions, WAL mode, and optimistic update checks.
+
+### Record payload limits
+
+To protect local storage and prevent unbounded contexts, strict limits are enforced before any disk write or indexing:
+- **Title**: 512 characters
+- **Summary**: 65,536 characters (64 KB)
+- **Rationale**: 65,536 characters (64 KB)
+- **Source reference**: 4,096 characters (4 KB)
+- **Tags**: maximum 64 tags, up to 128 characters each
+- **Input payload**: 262,144 characters (256 KB)
+
+Oversized incoming records are rejected with descriptive errors. Existing oversized legacy records can still be read and rebuilt; `ctxdock doctor` warns about any detected legacy records.
+
+### Database migrations and backups
+
+The SQLite search index maintains a versioned `metadata` table (`SCHEMA_VERSION = 2`). Upgrades (such as adding the `source` tracking column) automatically back up the database into `~/.ctxdock/backups/` before executing the migration in a transaction. If a migration ever encounters an error, the original database is preserved and instructions advise running `ctxdock rebuild` to recover the index cleanly from canonical JSON.
+
+### Scoped statistics
+
+`ctxdock stats` reports local storage and retrieval metrics scoped strictly to the current project and shared records by default, preventing accidental leakage of other project IDs or counts. Use `ctxdock stats --cross-project` to view global totals and a breakdown by project.
 
 ## Progressive retrieval and token efficiency
 
@@ -139,6 +159,8 @@ CtxDock stores curated, meaningful knowledge instead of complete conversation lo
 | Linux/macOS | Designed; CI matrix configured but not yet executed on GitHub | Codex expected; not manually verified |
 | Claude Code | Same CLI/storage expected | Experimental, untested |
 | Cursor | Same CLI/storage expected | Experimental, untested |
+| Gemini CLI | Same CLI/storage expected | Experimental, untested |
+| VS Code Copilot | Same CLI/storage expected | Experimental, untested |
 
 No compatibility claim implies identical slash-command syntax. See [compatibility](docs/compatibility.md).
 

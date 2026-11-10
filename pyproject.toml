@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ctxdock"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Save what matters. Recall anywhere."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,8 +21,17 @@ classifiers = [
 ]
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/TheLastAdmiraL/CtxDock"
+Repository = "https://github.com/TheLastAdmiraL/CtxDock.git"
+Issues = "https://github.com/TheLastAdmiraL/CtxDock/issues"
+Changelog = "https://github.com/TheLastAdmiraL/CtxDock/blob/main/CHANGELOG.md"
+
 [project.scripts]
 ctxdock = "ctxdock.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "ctxdock.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
