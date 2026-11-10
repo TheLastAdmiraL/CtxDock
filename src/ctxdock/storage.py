@@ -15,7 +15,7 @@ from typing import Any, Iterator
 from . import __version__
 from . import index
 from .projects import resolve_project
-from .records import VALID_STATUSES, content_hash, make_record, utc_now, validate_record_id
+from .records import VALID_STATUSES, check_legacy_limits, content_hash, make_record, utc_now, validate_record_id, _validate_field_limits
 from .security import SecurityError, ensure_within, inspect_text, safe_component
 
 
@@ -41,16 +41,27 @@ def _atomic_json(path: Path, value: Any) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        delays = (0.02, 0.04, 0.08, 0.16, 0.32)
+        for attempt, delay in enumerate(delays, start=1):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if attempt == len(delays):
+                    raise PermissionError(
+                        f"Could not atomically replace {path} after {attempt} attempts."
+                    )
+                time.sleep(delay)
         try:
             os.chmod(path, 0o600)
         except OSError:
             pass
-    finally:
+    except BaseException:
         try:
             Path(temporary).unlink(missing_ok=True)
         except OSError:
             pass
+        raise
 
 
 class Store:
@@ -207,6 +218,7 @@ class Store:
         if "content" in changes and "summary" not in changes:
             changes["summary"] = changes.pop("content")
         updated = {**current, **{k: v for k, v in changes.items() if k in allowed}}
+        _validate_field_limits(updated)
         if updated["status"] not in VALID_STATUSES:
             raise ValueError("Invalid status.")
         updated["category"] = safe_component(str(updated["category"]), "category")
@@ -302,7 +314,14 @@ class Store:
                 conn.execute("SELECT count(*) FROM records_fts").fetchone()
             checks["database"]["ok"] = True
             checks["fts5"] = {"ok": True, "detail": "available"}
-            checks["records"] = {"ok": True, "detail": f"{sum(1 for _ in self.iter_record_files())} readable JSON records"}
+            record_count = 0
+            legacy_warnings: list[str] = []
+            for record, _path in self.iter_record_files():
+                record_count += 1
+                legacy_warnings.extend(check_legacy_limits(record))
+            checks["records"] = {"ok": True, "detail": f"{record_count} readable JSON records"}
+            if legacy_warnings:
+                checks["legacy_limits"] = {"ok": False, "detail": legacy_warnings}
         except Exception as exc:
             checks["database"]["detail"] = str(exc)
             checks["fts5"]["detail"] = str(exc)

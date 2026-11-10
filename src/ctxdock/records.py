@@ -13,6 +13,60 @@ from .security import SecurityError, inspect_text, safe_component
 VALID_SCOPES = {"project", "shared"}
 VALID_STATUSES = {"active", "superseded", "archived"}
 
+# --- Payload size limits ---
+MAX_TITLE_CHARS = 512
+MAX_SUMMARY_CHARS = 65_536
+MAX_RATIONALE_CHARS = 65_536
+MAX_SOURCE_REFERENCE_CHARS = 4_096
+MAX_TAGS = 64
+MAX_TAG_CHARS = 128
+MAX_INPUT_CHARS = 262_144
+
+
+def _validate_field_limits(data: dict[str, Any]) -> None:
+    """Reject records exceeding payload size limits before any writes."""
+    raw_input = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    if len(raw_input) > MAX_INPUT_CHARS:
+        raise ValueError(f"Total input exceeds {MAX_INPUT_CHARS:,} characters ({len(raw_input):,} given).")
+    title = str(data.get("title", ""))
+    if len(title) > MAX_TITLE_CHARS:
+        raise ValueError(f"title exceeds {MAX_TITLE_CHARS} characters ({len(title)} given).")
+    summary = str(data.get("summary", data.get("content", "")))
+    if len(summary) > MAX_SUMMARY_CHARS:
+        raise ValueError(f"summary exceeds {MAX_SUMMARY_CHARS:,} characters ({len(summary):,} given).")
+    rationale = str(data.get("rationale", ""))
+    if len(rationale) > MAX_RATIONALE_CHARS:
+        raise ValueError(f"rationale exceeds {MAX_RATIONALE_CHARS:,} characters ({len(rationale):,} given).")
+    source = data.get("source") or {}
+    if isinstance(source, dict):
+        ref = str(source.get("reference") or "")
+        if len(ref) > MAX_SOURCE_REFERENCE_CHARS:
+            raise ValueError(f"source.reference exceeds {MAX_SOURCE_REFERENCE_CHARS:,} characters ({len(ref):,} given).")
+    tags = data.get("tags", [])
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(",") if t.strip()]
+    if isinstance(tags, list):
+        if len(tags) > MAX_TAGS:
+            raise ValueError(f"tags exceeds {MAX_TAGS} entries ({len(tags)} given).")
+        for tag in tags:
+            if isinstance(tag, str) and len(tag) > MAX_TAG_CHARS:
+                raise ValueError(f"A tag exceeds {MAX_TAG_CHARS} characters ({len(tag)} given).")
+
+
+def check_legacy_limits(record: dict[str, Any]) -> list[str]:
+    """Return warnings for oversized legacy records without rejecting them."""
+    warnings: list[str] = []
+    if len(str(record.get("title", ""))) > MAX_TITLE_CHARS:
+        warnings.append(f"title exceeds {MAX_TITLE_CHARS} characters (legacy record)")
+    if len(str(record.get("summary", ""))) > MAX_SUMMARY_CHARS:
+        warnings.append(f"summary exceeds {MAX_SUMMARY_CHARS:,} characters (legacy record)")
+    if len(str(record.get("rationale", ""))) > MAX_RATIONALE_CHARS:
+        warnings.append(f"rationale exceeds {MAX_RATIONALE_CHARS:,} characters (legacy record)")
+    tags = record.get("tags", [])
+    if isinstance(tags, list) and len(tags) > MAX_TAGS:
+        warnings.append(f"tags exceeds {MAX_TAGS} entries (legacy record)")
+    return warnings
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
@@ -30,6 +84,7 @@ def content_hash(record: dict[str, Any]) -> str:
 def make_record(data: dict[str, Any], project_id: str) -> tuple[dict[str, Any], list[str]]:
     if not isinstance(data, dict):
         raise ValueError("Record input must be a JSON object.")
+    _validate_field_limits(data)
     title = str(data.get("title", "")).strip()
     summary = str(data.get("summary", data.get("content", ""))).strip()
     if not title or not summary:

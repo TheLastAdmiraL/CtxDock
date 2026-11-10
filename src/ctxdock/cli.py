@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any, Sequence
@@ -158,7 +159,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     try:
         return run(parser.parse_args(argv))
-    except (ValueError, KeyError, FileNotFoundError, FileExistsError, PermissionError, RuntimeError, SecurityError) as exc:
+    except (ValueError, KeyError, FileNotFoundError, FileExistsError, PermissionError, RuntimeError, SecurityError, sqlite3.Error) as exc:
         print(f"ctxdock: error: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

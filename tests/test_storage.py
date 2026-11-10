@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import unittest
+from unittest import mock
 
-from ctxdock.security import SecurityError
-from ctxdock.storage import Store, bounded_json
+from ctxdock.security import SecurityError, ensure_within, _normalize_path
+from ctxdock.storage import Store, _atomic_json, bounded_json
 from tests.helpers import TempHome
 
 
@@ -132,6 +134,62 @@ class StorageTests(unittest.TestCase):
             self.store.save({"title": f"Synthetic {number}", "summary": f"Component {number} uses protocol term{number}", "category": "fixture"}, "large")
         result = self.store.find("term249", "large")
         self.assertEqual(result[0]["title"], "Synthetic 249")
+
+
+    def test_atomic_replace_retries_then_succeeds(self):
+        target = self.temp.path / "retry_test.json"
+        real_replace = os.replace
+        calls = 0
+
+        def flaky_replace(src, dst):
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise PermissionError("Access denied temporarily")
+            return real_replace(src, dst)
+
+        with mock.patch("ctxdock.storage.os.replace", side_effect=flaky_replace), mock.patch("ctxdock.storage.time.sleep"):
+            _atomic_json(target, {"status": "ok"})
+        self.assertEqual(calls, 3)
+        self.assertEqual(json.loads(target.read_text(encoding="utf-8")), {"status": "ok"})
+
+    def test_atomic_replace_exhaustion_preserves_old_record(self):
+        target = self.temp.path / "exhaustion_test.json"
+        target.write_text('{"status": "original"}', encoding="utf-8")
+        with mock.patch("ctxdock.storage.os.replace", side_effect=PermissionError("Locked")), mock.patch("ctxdock.storage.time.sleep"):
+            with self.assertRaises(PermissionError) as ctx:
+                _atomic_json(target, {"status": "new"})
+            self.assertIn("Could not atomically replace", str(ctx.exception))
+            self.assertIn("5 attempts", str(ctx.exception))
+        self.assertEqual(json.loads(target.read_text(encoding="utf-8")), {"status": "original"})
+
+    def test_extended_windows_path_is_accepted(self):
+        base = self.temp.path / "records"
+        base.mkdir(parents=True, exist_ok=True)
+        resolved_str = str(base.resolve())
+        extended_candidate = Path(f"\\\\?\\{resolved_str}\\child.json")
+        result = ensure_within(base, extended_candidate)
+        self.assertEqual(result.name, "child.json")
+
+    def test_unc_path_is_normalized(self):
+        unc_candidate = Path(r"\\?\UNC\server\share\records\file.json")
+        normalized = _normalize_path(unc_candidate)
+        self.assertTrue(normalized.startswith(r"\\server\share\records"))
+
+    def test_sibling_prefix_is_rejected(self):
+        base = self.temp.path / "records"
+        base.mkdir(parents=True, exist_ok=True)
+        sibling = self.temp.path / "records_sibling" / "file.json"
+        sibling.parent.mkdir(parents=True, exist_ok=True)
+        with self.assertRaises(SecurityError):
+            ensure_within(base, sibling)
+
+    def test_traversal_is_rejected(self):
+        base = self.temp.path / "records"
+        base.mkdir(parents=True, exist_ok=True)
+        outside = base / ".." / "outside.json"
+        with self.assertRaises(SecurityError):
+            ensure_within(base, outside)
 
 
 if __name__ == "__main__":

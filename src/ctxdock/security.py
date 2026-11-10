@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Iterable
@@ -17,7 +18,24 @@ _SECRET_PATTERNS = [
     ("GitHub token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{30,}|github_pat_[A-Za-z0-9_]{30,})\b")),
     ("OpenAI-style API key", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")),
     ("JWT", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")),
-    ("password assignment", re.compile(r"(?i)\b(?:password|passwd|pwd)\s*[:=]\s*['\"]?[^\s'\"]{8,}")),
+    ("password assignment", re.compile(
+        r"""(?ix)
+        (?:
+            \b(?:password|passwd|pwd|db_password|admin_pwd)\b\s*[:=]\s*
+            |
+            "(?:password|passwd|pwd|db_password|admin_pwd)"\s*:\s*
+        )
+        (?:
+            (['"])
+            (?!<redacted>|\[removed\]|\$\{[A-Za-z0-9_]+\}|\*{4,})
+            [^\r\n"']{8,}
+            \1
+            |
+            (?!<redacted>|\[removed\]|\$\{[A-Za-z0-9_]+\}|\*{4,})
+            [^\s'",;]{8,}
+        )
+        """
+    )),
 ]
 
 _SENSITIVE_PATTERNS = [
@@ -40,10 +58,32 @@ def safe_component(value: str, label: str = "path component") -> str:
     return value
 
 
+def _normalize_path(p: Path) -> str:
+    """Resolve and normalize a path for safe comparison.
+
+    Strips extended-length path prefixes (``\\\\?\\`` and ``\\\\?\\UNC\\``) that
+    Windows can produce, then applies ``os.path.normcase`` so drive-letter
+    casing and separator differences are handled consistently.
+    """
+    resolved = str(p.resolve())
+    # \\?\UNC\server\share  → \\server\share
+    if resolved.startswith("\\\\?\\UNC\\"):
+        resolved = "\\\\" + resolved[8:]
+    # \\?\C:\…  → C:\…
+    elif resolved.startswith("\\\\?\\"):
+        resolved = resolved[4:]
+    return os.path.normcase(resolved)
+
+
 def ensure_within(base: Path, candidate: Path) -> Path:
-    base_resolved = base.resolve()
-    candidate_resolved = candidate.resolve()
-    if candidate_resolved != base_resolved and base_resolved not in candidate_resolved.parents:
+    base_norm = _normalize_path(base)
+    candidate_norm = _normalize_path(candidate)
+    try:
+        common = os.path.commonpath([base_norm, candidate_norm])
+    except ValueError:
+        # Different drives / mount points on Windows
         raise SecurityError(f"Unsafe path outside CtxDock storage: {candidate}")
-    return candidate_resolved
+    if os.path.normcase(common) != os.path.normcase(base_norm):
+        raise SecurityError(f"Unsafe path outside CtxDock storage: {candidate}")
+    return candidate.resolve()
 

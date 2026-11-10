@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import sqlite3
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -77,6 +78,14 @@ class CliInstallerTests(unittest.TestCase):
         code, output, _ = self.invoke(["doctor", "--skill-dir", str(self.temp.path / "missing")])
         self.assertEqual(code, 1)
         self.assertFalse(json.loads(output)["skill"]["ok"])
+
+    def test_sqlite_errors_return_cli_exit_code_2(self):
+        self.invoke(["init"])
+        with mock.patch("ctxdock.storage.index.search", side_effect=sqlite3.OperationalError("database is locked")):
+            code, out, err = self.invoke(["find", "test"])
+            self.assertEqual(code, 2)
+            self.assertIn("ctxdock: error: database is locked", err)
+            self.assertNotIn("Traceback", err)
 
 
 if __name__ == "__main__":
