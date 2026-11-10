@@ -3,7 +3,7 @@
 CtxDock separates canonical storage, derived search state, and agent instructions.
 
 1. `projects.py` identifies a Git root and derives a path-based project ID, unless the caller supplies a stable explicit ID.
-2. `records.py` validates and normalizes knowledge, computes SHA-256 hashes, and rejects obvious secrets.
+2. `records.py` validates and normalizes knowledge, enforces payload bounds (512-char title, 64 KB summary and rationale, 64 tags, 256 KB input), computes SHA-256 hashes, and rejects obvious secrets.
 3. `storage.py` writes readable JSON atomically under the global home. It coordinates SQLite transactions, revision history, handoffs, recovery, and statistics.
 4. `index.py` maintains a parameterized metadata table and FTS5 index. Search filters project scope before returning compact results and ranks active records first.
 5. `cli.py` exposes predictable JSON input/output and nonzero error codes.

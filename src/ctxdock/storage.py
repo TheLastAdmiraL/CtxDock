@@ -319,9 +319,16 @@ class Store:
             for record, _path in self.iter_record_files():
                 record_count += 1
                 legacy_warnings.extend(check_legacy_limits(record))
-            checks["records"] = {"ok": True, "detail": f"{record_count} readable JSON records"}
+            checks["records"] = {
+                "ok": True,
+                "detail": f"{record_count} readable JSON records" + (f" ({len(legacy_warnings)} legacy warnings)" if legacy_warnings else ""),
+            }
             if legacy_warnings:
-                checks["legacy_limits"] = {"ok": False, "detail": legacy_warnings}
+                checks["legacy_limits"] = {
+                    "ok": True,
+                    "warning": True,
+                    "detail": legacy_warnings,
+                }
         except Exception as exc:
             checks["database"]["detail"] = str(exc)
             checks["fts5"]["detail"] = str(exc)

@@ -9,6 +9,15 @@ from unittest import mock
 
 from ctxdock.security import SecurityError, ensure_within, _normalize_path
 from ctxdock.storage import Store, _atomic_json, bounded_json
+from ctxdock.records import (
+    MAX_TITLE_CHARS,
+    MAX_SUMMARY_CHARS,
+    MAX_RATIONALE_CHARS,
+    MAX_SOURCE_REFERENCE_CHARS,
+    MAX_TAGS,
+    MAX_TAG_CHARS,
+    MAX_INPUT_CHARS,
+)
 from tests.helpers import TempHome
 
 
@@ -190,6 +199,167 @@ class StorageTests(unittest.TestCase):
         outside = base / ".." / "outside.json"
         with self.assertRaises(SecurityError):
             ensure_within(base, outside)
+
+
+class RecordLimitsAndSecretDetectionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = TempHome()
+        self.store = Store(self.temp.path)
+        self.store.init()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_password_patterns_recognized(self):
+        patterns = [
+            'password = "secretpassword"',
+            '"password": "secretpassword"',
+            'db_password = "secretpassword"',
+            'admin_pwd: "secretpassword"',
+            'password = ultrasecretvalue',
+        ]
+        for idx, payload in enumerate(patterns):
+            with self.assertRaises(SecurityError, msg=f"Failed to reject: {payload}"):
+                self.store.save({"title": f"Secret {idx}", "summary": payload}, "alpha")
+
+    def test_exempt_redacted_placeholders(self):
+        placeholders = [
+            'password = "<redacted>"',
+            '"password": "<redacted>"',
+            'password = "[removed]"',
+            '"password": "[removed]"',
+            'password = "${PASSWORD}"',
+            '"password": "${PASSWORD}"',
+            'password = "********"',
+            '"password": "********"',
+            'admin_pwd: [removed]',
+            'db_password = <redacted>',
+        ]
+        for idx, payload in enumerate(placeholders):
+            rec, _ = self.store.save({"title": f"Safe {idx}", "summary": payload}, "alpha")
+            self.assertTrue(rec["id"].startswith("mem-"))
+
+    def test_continue_rejecting_other_secrets(self):
+        secrets = [
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0\n-----END RSA PRIVATE KEY-----",
+            "AKIAIOSFODNN7EXAMPLE",
+            "ghp_1234567890123456789012345678901234",
+            "sk-123456789012345678901234",
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozG4B1ptLQ2mX_8SZkd84ee_p8cR6jE",
+        ]
+        for sec in secrets:
+            with self.assertRaises(SecurityError):
+                self.store.save({"title": "Key", "summary": f"Config uses {sec}"}, "alpha")
+
+    def test_record_limits_exact_boundaries(self):
+        exact_title = "T" * MAX_TITLE_CHARS
+        exact_summary = "S" * MAX_SUMMARY_CHARS
+        exact_rationale = "R" * MAX_RATIONALE_CHARS
+        exact_ref = "http://example.com/" + "x" * (MAX_SOURCE_REFERENCE_CHARS - 19)
+        exact_tags = [f"tag-{i:02d}-" + "t" * (MAX_TAG_CHARS - 7) for i in range(MAX_TAGS)]
+
+        rec, _ = self.store.save({
+            "title": exact_title,
+            "summary": exact_summary,
+            "rationale": exact_rationale,
+            "tags": exact_tags,
+            "source": {"reference": exact_ref},
+        }, "alpha")
+        self.assertTrue(rec["id"].startswith("mem-"))
+        loaded = self.store.get(rec["id"])
+        self.assertEqual(len(loaded["title"]), MAX_TITLE_CHARS)
+        self.assertEqual(len(loaded["summary"]), MAX_SUMMARY_CHARS)
+
+    def test_record_limits_over_limit_cases(self):
+        # Title over limit
+        with self.assertRaisesRegex(ValueError, "title exceeds 512 characters"):
+            self.store.save({"title": "T" * (MAX_TITLE_CHARS + 1), "summary": "Valid summary"}, "alpha")
+
+        # Summary over limit
+        with self.assertRaisesRegex(ValueError, "summary exceeds 65,536 characters"):
+            self.store.save({"title": "Valid title", "summary": "S" * (MAX_SUMMARY_CHARS + 1)}, "alpha")
+
+        # Rationale over limit
+        with self.assertRaisesRegex(ValueError, "rationale exceeds 65,536 characters"):
+            self.store.save({"title": "Valid title", "summary": "Valid summary", "rationale": "R" * (MAX_RATIONALE_CHARS + 1)}, "alpha")
+
+        # Source reference over limit
+        with self.assertRaisesRegex(ValueError, "source.reference exceeds 4,096 characters"):
+            self.store.save({"title": "Valid title", "summary": "Valid summary", "source": {"reference": "X" * (MAX_SOURCE_REFERENCE_CHARS + 1)}}, "alpha")
+
+        # Tags count over limit
+        with self.assertRaisesRegex(ValueError, "tags exceeds 64 entries"):
+            self.store.save({"title": "Valid title", "summary": "Valid summary", "tags": [f"t{i}" for i in range(MAX_TAGS + 1)]}, "alpha")
+
+        # Single tag chars over limit
+        with self.assertRaisesRegex(ValueError, "A tag exceeds 128 characters"):
+            self.store.save({"title": "Valid title", "summary": "Valid summary", "tags": ["T" * (MAX_TAG_CHARS + 1)]}, "alpha")
+
+    def test_rejected_saves_create_neither_json_nor_index_rows(self):
+        records_dir = self.temp.path / "records"
+        initial_files = list(records_dir.rglob("*.json"))
+
+        import sqlite3
+        with sqlite3.connect(self.store.db_path) as conn:
+            initial_count = conn.execute("SELECT count(*) FROM records").fetchone()[0]
+
+        # Rejected by limit
+        with self.assertRaises(ValueError):
+            self.store.save({"title": "X" * 600, "summary": "Valid summary"}, "alpha")
+
+        # Rejected by secret
+        with self.assertRaises(SecurityError):
+            self.store.save({"title": "Valid", "summary": 'password = "mysecretpassword"'}, "alpha")
+
+        after_files = list(records_dir.rglob("*.json"))
+        with sqlite3.connect(self.store.db_path) as conn:
+            after_count = conn.execute("SELECT count(*) FROM records").fetchone()[0]
+
+        self.assertEqual(len(after_files), len(initial_files))
+        self.assertEqual(after_count, initial_count)
+
+    def test_legacy_oversized_records_can_be_read_and_rebuilt_and_warn_in_doctor(self):
+        oversized = {
+            "id": "mem-legacy00000001",
+            "project_id": "alpha",
+            "scope": "project",
+            "category": "note",
+            "title": "T" * 600,
+            "summary": "Legacy oversized note",
+            "rationale": "",
+            "tags": ["legacy"],
+            "status": "active",
+            "source": {"agent": "legacy", "reference": None},
+            "created_at": "2026-01-01T00:00:00.000000Z",
+            "updated_at": "2026-01-01T00:00:00.000000Z",
+            "content_hash": "dummyhash",
+            "revisions": [],
+        }
+        dest = self.temp.path / "records" / "alpha" / f"{oversized['id']}.json"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(oversized), encoding="utf-8")
+
+        # Rebuild indexes the legacy file
+        rebuilt = self.store.rebuild()
+        self.assertGreaterEqual(rebuilt, 1)
+
+        # Existing record can be read
+        loaded = self.store.get(oversized["id"])
+        self.assertEqual(loaded["title"], oversized["title"])
+
+        # Doctor warns
+        checks, ok = self.store.doctor(skill_dir=Path("skill/ctxdock").resolve())
+        self.assertTrue(ok)
+        self.assertIn("legacy_limits", checks)
+        self.assertTrue(checks["legacy_limits"]["warning"])
+
+    def test_update_enforces_limits(self):
+        rec, _ = self.store.save({"title": "Original title", "summary": "Original summary"}, "alpha")
+        with self.assertRaises(ValueError):
+            self.store.update(rec["id"], {"title": "T" * 600})
+        # Original remains unchanged
+        unchanged = self.store.get(rec["id"])
+        self.assertEqual(unchanged["title"], "Original title")
 
 
 if __name__ == "__main__":
