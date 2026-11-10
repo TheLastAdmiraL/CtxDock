@@ -9,6 +9,7 @@ from unittest import mock
 
 from ctxdock.security import SecurityError, ensure_within, _normalize_path
 from ctxdock.storage import Store, _atomic_json, bounded_json
+from ctxdock import index
 from ctxdock.records import (
     MAX_TITLE_CHARS,
     MAX_SUMMARY_CHARS,
@@ -360,6 +361,165 @@ class RecordLimitsAndSecretDetectionTests(unittest.TestCase):
         # Original remains unchanged
         unchanged = self.store.get(rec["id"])
         self.assertEqual(unchanged["title"], "Original title")
+
+
+V1_SCHEMA = """
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=FULL;
+CREATE TABLE IF NOT EXISTS records (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  category TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  rationale TEXT NOT NULL,
+  tags TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  path TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_records_project ON records(project_id, scope, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_records_hash ON records(project_id, scope, content_hash);
+CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
+  id UNINDEXED, title, summary, rationale, tags, tokenize='unicode61'
+);
+"""
+
+
+class MigrationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = TempHome()
+        self.db_path = self.temp.path / "index.db"
+        self.backups_dir = self.temp.path / "backups"
+        self.records_dir = self.temp.path / "records" / "alpha"
+        self.records_dir.mkdir(parents=True, exist_ok=True)
+        self.backups_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def create_v1_database(self) -> dict[str, str]:
+        import sqlite3
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executescript(V1_SCHEMA)
+            record_id = "mem-v1test00000001"
+            json_path = self.records_dir / f"{record_id}.json"
+            record_data = {
+                "id": record_id,
+                "project_id": "alpha",
+                "scope": "project",
+                "category": "architecture",
+                "title": "PostgreSQL v1 decision",
+                "summary": "Use PostgreSQL for relational entities",
+                "rationale": "High reliability",
+                "tags": ["database"],
+                "status": "active",
+                "created_at": "2026-01-01T00:00:00.000000Z",
+                "updated_at": "2026-01-01T00:00:00.000000Z",
+                "content_hash": "hash_v1",
+                "revisions": [],
+            }
+            json_path.write_text(json.dumps(record_data), encoding="utf-8")
+            values = (
+                record_id, "alpha", "project", "architecture",
+                "PostgreSQL v1 decision", "Use PostgreSQL for relational entities",
+                "High reliability", json.dumps(["database"]), "active",
+                "2026-01-01T00:00:00.000000Z", "2026-01-01T00:00:00.000000Z",
+                "hash_v1", str(json_path),
+            )
+            conn.execute("INSERT INTO records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
+            conn.execute(
+                "INSERT INTO records_fts(id, title, summary, rationale, tags) VALUES (?, ?, ?, ?, ?)",
+                (record_id, "PostgreSQL v1 decision", "Use PostgreSQL for relational entities", "High reliability", "database"),
+            )
+        return {"id": record_id, "path": str(json_path)}
+
+    def test_initialization_upgrades_v1_and_preserves_records(self):
+        record_info = self.create_v1_database()
+
+        # Before migration, check version
+        import sqlite3
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            self.assertEqual(index.get_schema_version(conn), 1)
+
+        # Upgrade via initialize
+        index.initialize(self.db_path)
+
+        # Verify upgraded version
+        with index.connect(self.db_path) as conn:
+            self.assertEqual(index.get_schema_version(conn), 2)
+            cols = [r["name"] for r in conn.execute("PRAGMA table_info(records)").fetchall()]
+            self.assertIn("source", cols)
+
+            # Existing record remains searchable
+            results = index.search(conn, "PostgreSQL", "alpha")
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["id"], record_info["id"])
+            # source defaults safely
+            self.assertEqual(results[0]["source"], {})
+
+        # Verify a backup was created during upgrade
+        backups = list(self.backups_dir.glob("index-v1-*.db"))
+        self.assertTrue(len(backups) >= 1)
+
+    def test_repeating_initialization_does_nothing(self):
+        self.create_v1_database()
+        index.initialize(self.db_path)
+        backup_count_1 = len(list(self.backups_dir.glob("index-v1-*.db")))
+
+        # Repeat initialization
+        index.initialize(self.db_path)
+        backup_count_2 = len(list(self.backups_dir.glob("index-v1-*.db")))
+        self.assertEqual(backup_count_1, backup_count_2)
+
+        with index.connect(self.db_path) as conn:
+            self.assertEqual(index.get_schema_version(conn), 2)
+
+    def test_failed_migration_leaves_backup_and_preserves_database(self):
+        self.create_v1_database()
+
+        # Induce failure during migration
+        with mock.patch("ctxdock.index.set_schema_version", side_effect=RuntimeError("Disk failure")):
+            with self.assertRaises(RuntimeError) as ctx:
+                index.initialize(self.db_path)
+            self.assertIn("Run 'ctxdock rebuild' to recover", str(ctx.exception))
+
+        # Verify backup was left behind
+        backups = list(self.backups_dir.glob("index-v1-*.db"))
+        self.assertTrue(len(backups) >= 1)
+
+        # Original database is preserved (version 1)
+        import sqlite3
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            self.assertEqual(index.get_schema_version(conn), 1)
+
+    def test_rebuild_works_after_migration(self):
+        self.create_v1_database()
+        store = Store(self.temp.path)
+        # Initialize/migrate
+        store.init()
+
+        # Save a new record with source
+        new_rec, _ = store.save({
+            "title": "New decision with source",
+            "summary": "Source tracking enabled",
+            "source": {"agent": "codex", "reference": "PR#101"},
+        }, "alpha")
+
+        # Rebuild
+        count = store.rebuild()
+        self.assertGreaterEqual(count, 2)
+
+        # Search new record and verify source is preserved
+        results = store.find("tracking", "alpha", limit=5)
+        self.assertEqual(results[0]["id"], new_rec["id"])
+        self.assertEqual(results[0]["source"]["agent"], "codex")
+        self.assertEqual(results[0]["source"]["reference"], "PR#101")
 
 
 if __name__ == "__main__":

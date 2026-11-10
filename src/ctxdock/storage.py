@@ -205,7 +205,17 @@ class Store:
             rows = conn.execute(
                 f"SELECT * FROM records {where} ORDER BY updated_at DESC LIMIT ?", params
             ).fetchall()
-        return [{**dict(row), "tags": json.loads(row["tags"])} for row in rows]
+        results = []
+        for row in rows:
+            rec = dict(row)
+            rec["tags"] = json.loads(rec["tags"])
+            if "source" in rec:
+                try:
+                    rec["source"] = json.loads(rec["source"]) if isinstance(rec["source"], str) else (rec["source"] or {})
+                except (json.JSONDecodeError, TypeError):
+                    rec["source"] = {}
+            results.append(rec)
+        return results
 
     def update(self, record_id: str, changes: dict[str, Any], expected_updated_at: str | None = None) -> tuple[dict[str, Any], list[str]]:
         current = self.get(record_id)

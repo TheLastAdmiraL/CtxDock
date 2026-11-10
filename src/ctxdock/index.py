@@ -5,14 +5,21 @@ from __future__ import annotations
 import json
 from difflib import SequenceMatcher
 import re
+import shutil
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any, Iterable
 
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=FULL;
+CREATE TABLE IF NOT EXISTS metadata (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS records (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
@@ -26,7 +33,8 @@ CREATE TABLE IF NOT EXISTS records (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   content_hash TEXT NOT NULL,
-  path TEXT NOT NULL
+  path TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_records_project ON records(project_id, scope, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_records_hash ON records(project_id, scope, content_hash);
@@ -53,21 +61,86 @@ def connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def get_schema_version(conn: sqlite3.Connection) -> int:
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'"
+    ).fetchone()
+    if not table_exists:
+        records_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='records'"
+        ).fetchone()
+        return 1 if records_exists else 0
+    row = conn.execute("SELECT value FROM metadata WHERE key = 'schema_version'").fetchone()
+    return int(row["value"]) if row else 1
+
+
+def set_schema_version(conn: sqlite3.Connection, version: int) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)",
+        (str(version),),
+    )
+
+
 def initialize(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        with connect(path) as conn:
+            conn.executescript(SCHEMA)
+            set_schema_version(conn, SCHEMA_VERSION)
+        return
+
     with connect(path) as conn:
-        conn.executescript(SCHEMA)
+        version = get_schema_version(conn)
+
+    if version == SCHEMA_VERSION:
+        return
+
+    if version == 0:
+        with connect(path) as conn:
+            conn.executescript(SCHEMA)
+            set_schema_version(conn, SCHEMA_VERSION)
+        return
+
+    if version < SCHEMA_VERSION:
+        backup_dir = path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_path = backup_dir / f"index-v{version}-{int(time.time())}.db"
+        shutil.copy2(path, backup_path)
+        try:
+            with connect(path) as conn:
+                if version == 1:
+                    conn.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                    cols = [r["name"] for r in conn.execute("PRAGMA table_info(records)").fetchall()]
+                    if "source" not in cols:
+                        conn.execute("ALTER TABLE records ADD COLUMN source TEXT NOT NULL DEFAULT '{}'")
+                    set_schema_version(conn, 2)
+        except Exception as exc:
+            if backup_path.exists():
+                shutil.copy2(backup_path, path)
+            raise RuntimeError(
+                f"Database migration from version {version} to {SCHEMA_VERSION} failed: {exc}. "
+                f"The original database was preserved at {backup_path}. Run 'ctxdock rebuild' to recover from canonical JSON."
+            ) from exc
 
 
 def upsert(conn: sqlite3.Connection, record: dict[str, Any], path: Path) -> None:
+    source_json = json.dumps(record.get("source") or {})
     values = (
         record["id"], record["project_id"], record["scope"], record["category"], record["title"],
         record["summary"], record.get("rationale", ""), json.dumps(record.get("tags", [])),
         record["status"], record["created_at"], record["updated_at"], record["content_hash"], str(path),
+        source_json,
     )
     conn.execute("DELETE FROM records_fts WHERE id = ?", (record["id"],))
     conn.execute("DELETE FROM records WHERE id = ?", (record["id"],))
     conn.execute(
-        "INSERT INTO records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values
+        """
+        INSERT INTO records (
+            id, project_id, scope, category, title, summary, rationale, tags,
+            status, created_at, updated_at, content_hash, path, source
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        values,
     )
     conn.execute(
         "INSERT INTO records_fts(id, title, summary, rationale, tags) VALUES (?, ?, ?, ?, ?)",
@@ -132,6 +205,11 @@ def search(
         seen_texts.append(normalized)
         item["relevance"] = round(1.0 / (1.0 + abs(float(item.pop("raw_rank")))), 4)
         item["tags"] = json.loads(item["tags"])
+        if "source" in item:
+            try:
+                item["source"] = json.loads(item["source"]) if isinstance(item["source"], str) else (item["source"] or {})
+            except (json.JSONDecodeError, TypeError):
+                item["source"] = {}
         results.append(item)
     return results
 
