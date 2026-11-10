@@ -176,16 +176,17 @@ def search(
     if status:
         where.append("r.status = ?")
         params.append(status)
+    candidate_limit = min(max(limit * 4, limit), 400)
+    params.append(candidate_limit)
     sql = f"""
       SELECT r.*, bm25(records_fts, 0.0, 8.0, 3.0, 1.5, 1.0) AS raw_rank,
-             snippet(records_fts, 2, '', '', ' … ', 18) AS snippet
+             snippet(records_fts, -1, '', '', ' … ', 18) AS snippet
       FROM records_fts JOIN records r ON r.id = records_fts.id
       WHERE {' AND '.join(where)}
       ORDER BY CASE r.status WHEN 'active' THEN 0 WHEN 'superseded' THEN 1 ELSE 2 END,
                raw_rank ASC, r.updated_at DESC
       LIMIT ?
     """
-    params.append(max(1, min(limit, 100)))
     rows = conn.execute(sql, params).fetchall()
     if not rows and " AND " in match:
         fallback_params = list(params)
@@ -203,7 +204,6 @@ def search(
             continue
         seen_hashes.add(item["content_hash"])
         seen_texts.append(normalized)
-        item["relevance"] = round(1.0 / (1.0 + abs(float(item.pop("raw_rank")))), 4)
         item["tags"] = json.loads(item["tags"])
         if "source" in item:
             try:
@@ -211,6 +211,21 @@ def search(
             except (json.JSONDecodeError, TypeError):
                 item["source"] = {}
         results.append(item)
+
+    results = results[:limit]
+
+    if results:
+        strengths = [-float(item["raw_rank"]) for item in results]
+        min_strength = min(strengths)
+        max_strength = max(strengths)
+        span = max_strength - min_strength
+        for item, strength in zip(results, strengths):
+            if span == 0 or len(results) == 1:
+                item["relevance"] = 1.0
+            else:
+                item["relevance"] = round((strength - min_strength) / span, 4)
+            item.pop("raw_rank", None)
+
     return results
 
 

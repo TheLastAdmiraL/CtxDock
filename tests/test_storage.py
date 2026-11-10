@@ -522,6 +522,105 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(results[0]["source"]["reference"], "PR#101")
 
 
+class SearchRankingAndDeduplicationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = TempHome()
+        self.store = Store(self.temp.path)
+        self.store.init()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_better_bm25_matches_never_have_lower_relevance(self):
+        # Record with high keyword density in title (weight 8.0) and summary (weight 3.0)
+        rec1, _ = self.store.save({
+            "title": "PostgreSQL PostgreSQL deployment",
+            "summary": "PostgreSQL clustering PostgreSQL deployment guide",
+            "category": "architecture",
+        }, "alpha")
+        # Record with lower keyword presence
+        rec2, _ = self.store.save({
+            "title": "General database overview",
+            "summary": "Mentions PostgreSQL once for reference",
+            "category": "architecture",
+        }, "alpha")
+
+        results = self.store.find("PostgreSQL", "alpha", limit=5)
+        self.assertGreaterEqual(len(results), 2)
+        # First result is the better match
+        self.assertEqual(results[0]["id"], rec1["id"])
+        self.assertEqual(results[0]["relevance"], 1.0)
+        self.assertEqual(results[1]["relevance"], 0.0)
+        self.assertGreaterEqual(results[0]["relevance"], results[1]["relevance"])
+
+    def test_matches_in_fields_produce_useful_snippets(self):
+        # Match only in title
+        self.store.save({"title": "UniqueTitleToken architecture", "summary": "No matching text here"}, "alpha")
+        # Match only in summary
+        self.store.save({"title": "Generic note", "summary": "Contains UniqueSummaryToken for testing"}, "alpha")
+        # Match only in rationale
+        self.store.save({"title": "Rationale test", "summary": "Ordinary body", "rationale": "Special UniqueRationaleToken decision"}, "alpha")
+        # Match only in tags
+        self.store.save({"title": "Tag test", "summary": "Ordinary text", "tags": ["UniqueTagToken"]}, "alpha")
+
+        for token in ("UniqueTitleToken", "UniqueSummaryToken", "UniqueRationaleToken", "UniqueTagToken"):
+            res = self.store.find(token, "alpha")
+            self.assertEqual(len(res), 1, f"Failed to find {token}")
+            self.assertTrue(res[0]["snippet"], f"Snippet empty for {token}")
+            self.assertIn(token.lower(), res[0]["snippet"].lower(), f"Snippet missing token {token}")
+
+    def test_near_duplicates_deduplication_preserves_requested_limit(self):
+        # 5 near-duplicates that share ~98% text
+        base_text = "Standardization decision for component pipelines in cloud native enterprise environments."
+        for i in range(5):
+            self.store.save({
+                "title": f"Pipeline Standard {i}",
+                "summary": f"{base_text} Variant marker {i}.",
+                "category": "architecture",
+            }, "alpha")
+
+        # 5 distinct records also matching "standardization"
+        distinct_topics = [
+            ("Database Engine", "PostgreSQL was selected for transactional ACID guarantees and relational modeling."),
+            ("Cache Infrastructure", "Redis in-memory caching stores ephemeral session state with five minute TTLs."),
+            ("Message Broker", "Apache Kafka streams event messages between distributed background workers."),
+            ("Authentication Gateway", "OAuth2 authorization server issues short-lived JWT bearer tokens."),
+            ("Metrics Telemetry", "Prometheus scrapes OpenTelemetry metrics endpoints on internal port 9090."),
+        ]
+        for title, summary in distinct_topics:
+            self.store.save({
+                "title": title,
+                "summary": f"{summary} Adheres to engineering standardization guideline.",
+                "category": "architecture",
+            }, "alpha")
+
+        # Request limit=5. Even though the first 5 are near-duplicates and 4 get deduplicated,
+        # the expanded candidate limit (min(max(5*4, 5), 400) = 20) ensures 5 total results are returned.
+        results = self.store.find("standardization", "alpha", limit=5)
+        self.assertEqual(len(results), 5)
+
+    def test_active_records_remain_ahead_of_superseded_records(self):
+        # Old record has many repetitions of search terms
+        old_rec, _ = self.store.save({
+            "title": "Auth token auth token auth token",
+            "summary": "auth token auth token auth token auth token auth token",
+            "category": "security",
+        }, "alpha")
+        # Mark it superseded by a new active record
+        new_rec, _ = self.store.save({
+            "title": "Auth decision",
+            "summary": "Use auth token with JWT",
+            "supersedes": old_rec["id"],
+            "category": "security",
+        }, "alpha")
+
+        results = self.store.find("auth token", "alpha", limit=5)
+        self.assertEqual(results[0]["id"], new_rec["id"])
+        self.assertEqual(results[0]["status"], "active")
+        self.assertEqual(results[1]["id"], old_rec["id"])
+        self.assertEqual(results[1]["status"], "superseded")
+
+
 if __name__ == "__main__":
     unittest.main()
 
