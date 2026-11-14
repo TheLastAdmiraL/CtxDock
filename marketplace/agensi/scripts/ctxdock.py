@@ -421,7 +421,10 @@ def initialize(path: Path) -> None:
         backup_dir = path.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         backup_path = backup_dir / f"index-v{version}-{int(time.time())}.db"
-        shutil.copy2(path, backup_path)
+        with connect(path) as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            with sqlite3.connect(backup_path) as dest:
+                conn.backup(dest)
         try:
             with connect(path) as conn:
                 if version == 1:
@@ -431,6 +434,10 @@ def initialize(path: Path) -> None:
                         conn.execute("ALTER TABLE records ADD COLUMN source TEXT NOT NULL DEFAULT '{}'")
                     set_schema_version(conn, 2)
         except Exception as exc:
+            for suffix in ("-wal", "-shm"):
+                wal_file = path.with_name(path.name + suffix)
+                if wal_file.exists():
+                    wal_file.unlink(missing_ok=True)
             if backup_path.exists():
                 shutil.copy2(backup_path, path)
             raise RuntimeError(

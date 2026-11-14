@@ -404,8 +404,7 @@ class MigrationTests(unittest.TestCase):
         self.temp.cleanup()
 
     def create_v1_database(self) -> dict[str, str]:
-        import sqlite3
-        with sqlite3.connect(self.db_path) as conn:
+        with index.connect(self.db_path) as conn:
             conn.executescript(V1_SCHEMA)
             record_id = "mem-v1test00000001"
             json_path = self.records_dir / f"{record_id}.json"
@@ -437,15 +436,15 @@ class MigrationTests(unittest.TestCase):
                 "INSERT INTO records_fts(id, title, summary, rationale, tags) VALUES (?, ?, ?, ?, ?)",
                 (record_id, "PostgreSQL v1 decision", "Use PostgreSQL for relational entities", "High reliability", "database"),
             )
+            conn.commit()
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         return {"id": record_id, "path": str(json_path)}
 
     def test_initialization_upgrades_v1_and_preserves_records(self):
         record_info = self.create_v1_database()
 
         # Before migration, check version
-        import sqlite3
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
+        with index.connect(self.db_path) as conn:
             self.assertEqual(index.get_schema_version(conn), 1)
 
         # Upgrade via initialize
@@ -495,9 +494,7 @@ class MigrationTests(unittest.TestCase):
         self.assertTrue(len(backups) >= 1)
 
         # Original database is preserved (version 1)
-        import sqlite3
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
+        with index.connect(self.db_path) as conn:
             self.assertEqual(index.get_schema_version(conn), 1)
 
     def test_rebuild_works_after_migration(self):
