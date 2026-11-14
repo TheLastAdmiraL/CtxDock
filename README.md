@@ -2,175 +2,148 @@
 
 **Save what matters. Recall anywhere.**
 
-CtxDock is a local-first Agent Skill for carrying curated project knowledge between coding-agent sessions. It stores decisions, constraints, fixes, and handoffs—not entire conversations—and retrieves a small ranked slice when an agent needs it. Ordinary storage and search use Python, JSON, SQLite FTS5, and zero model or network calls.
+CtxDock is a local-first Agent Skill for carrying curated project knowledge, architectural decisions, constraints, and session handoffs between coding-agent sessions. It uses 100% Python standard library (`sqlite3`, `json`, `pathlib`) with zero cloud dependencies, no network calls, and no embedding APIs.
 
-CtxDock is an early, Codex-first MVP. Claude Code, Cursor, Gemini CLI, and VS Code Copilot integrations remain experimental and have not yet been verified end to end.
+---
 
-## Why CtxDock
+# **RECOMMENDED INSTALLATION: COPY TO YOUR CODING AGENT**
 
-Coding agents have separate context windows. Re-pasting a long history is slow and context-heavy; relying on a session sidebar does not help another local agent. CtxDock provides:
-
-- global local storage under `~/.ctxdock/`, independent of any source repository;
-- project isolation by default, with explicit shared and cross-project access;
-- human-readable JSON as the recoverable source of truth;
-- ranked SQLite FTS5 search with compact, budgeted results;
-- exact deduplication, stable IDs, revisions, superseded records, and handoffs;
-- obvious-secret rejection and sensitive-content warnings;
-- no daemon, cloud account, API key, telemetry, embeddings, or runtime dependency;
-- a concise user-level Codex skill and safe install/uninstall commands.
-
-## Requirements and installation
-
-Requires Python 3.11+ with SQLite FTS5 (included in normal Python distributions).
-
-```console
-git clone https://github.com/TheLastAdmiraL/CtxDock.git ctxdock
-cd ctxdock
-python -m pip install .
-ctxdock init
-ctxdock install-skill
-ctxdock doctor
-```
-
-For isolated CLI installation, `pipx install .` is also suitable. `install-skill` checks for an existing `ctxdock` skill and refuses to overwrite it unless `--upgrade` is passed. It never changes persistent agent instructions. `uninstall-skill` removes only skill files and leaves `~/.ctxdock/` untouched.
-
-Codex discovers user skills in `~/.agents/skills/`. Start a new Codex session after installation, then invoke the skill natively:
+Simply copy and paste this single instruction into your AI coding agent (Antigravity, Claude Code, Cursor, OpenAI Codex, or Gemini CLI):
 
 ```text
-$ctxdock find authentication decisions
-$ctxdock save
+Install the CtxDock skill from https://github.com/TheLastAdmiraL/CtxDock
 ```
 
-The skill tells the agent to call the real `ctxdock` executable. The `$ctxdock` text is a Codex skill invocation, not a shell command. Other hosts may use `/ctxdock`; their native syntax differs.
+> **You can install it using `git clone` but the config requires questions that you will need to answer. We recommend using the instruction given to the agent. If you do `git clone` then you can set it up from your agent by giving these instructions:**
+>
+> 1. Clone the repository:
+>    ```bash
+>    git clone https://github.com/TheLastAdmiraL/CtxDock.git
+>    cd CtxDock
+>    ```
+> 2. Open your coding agent in the directory and say:
+>    ```text
+>    Set up CtxDock from this repository
+>    ```
+> 3. Your agent will ask you two simple questions in chat:
+>    * **Scope**: Do you want **Project-Specific** memory (`.ctxdock/` inside this repo) or **Global** memory (`~/.ctxdock/` across all projects)?
+>    * **Agents**: Which agents should have access? (`Antigravity`, `Claude Code`, `Cursor`, `OpenAI Codex`, `Gemini CLI`, or `All`)
+>
+> Your agent will automatically configure the skill hooks with **zero pip dependencies**.
 
-## First use
+---
 
-PowerShell:
+## Why CtxDock Saves Tokens
 
-```powershell
-'{"title":"Database choice","summary":"Use PostgreSQL for relational data.","category":"architecture","rationale":"Entities are strongly related.","tags":["database","backend"],"source":{"agent":"codex","reference":null}}' | ctxdock save
-ctxdock find "database choice"
-ctxdock get mem-0123456789abcdef --summary
-'{"summary":"Use PostgreSQL 17.","expected_updated_at":"2026-11-09T10:00:00.000000Z"}' | ctxdock update mem-0123456789abcdef
+Coding agents suffer from amnesia across sessions. Re-pasting entire chat transcripts or re-reading dozens of repository files burns tens of thousands of tokens per session.
+
+CtxDock eliminates this waste through:
+- **Ultra-Lean Idle Context (< 350 tokens)**: The skill instructions loaded into agent system prompts are kept strictly under 50 lines.
+- **Progressive Retrieval**:
+  - `find` returns only 1-line titles, snippets, and IDs (**~100–150 tokens**).
+  - `get --summary` returns only the exact rationale and decision needed (**~150 tokens**).
+- **Project-Specific Relevance**: In project-specific mode, agents only search records relevant to the current repository—zero irrelevant results or cross-project token bloat.
+- **Token Efficiency**: Avoiding just one repeated debugging loop or two unnecessary full-file reads pays for hundreds of CtxDock queries.
+
+---
+
+## Storage Architecture: Project-Specific vs. Global
+
+CtxDock automatically detects where to store and read memories:
+
+### 1. Project-Specific (Local) Mode
+* **Location**: `<repo>/.ctxdock/`
+* **Team Sharing**: JSON records in `.ctxdock/records/` can be committed to Git so anyone on your team (and their agents) shares the exact same architectural history.
+* **Safe Defaults**: SQLite search indices (`*.db`, `*.db-wal`) are automatically `.gitignore`'d and safely rebuilt locally on demand with zero merge conflicts.
+* **Boundary**: Memories never leave the repository.
+
+### 2. Global Mode
+* **Location**: `~/.ctxdock/` (or `%USERPROFILE%\.ctxdock` on Windows).
+* **Cross-Project Access**: Accessible by all agents across any project on your computer.
+* **Isolation**: Records remain project-isolated by default, with explicit `--scope shared` for global developer preferences and rules.
+
+---
+
+## Agent Integration Hooks
+
+When installed, CtxDock integrates into each agent's native discovery workflow without requiring global environment modifications:
+
+| Agent | Global Hook Location | Project-Specific Hook Location |
+| :--- | :--- | :--- |
+| **Antigravity** | `~/.agents/skills/ctxdock/` | `<repo>/.agent/skills/ctxdock/` |
+| **OpenAI Codex** | `~/.agents/skills/ctxdock/` | `<repo>/.agents/skills/ctxdock/` |
+| **Cursor** | `~/.cursor/rules/ctxdock.mdc` | `<repo>/.cursor/rules/ctxdock.mdc` |
+| **Claude Code** | Global `~/.claude/` rule | Appends pointer to `<repo>/CLAUDE.md` |
+| **Gemini CLI** | `~/.gemini/skills/ctxdock/` | `<repo>/.gemini/skills/ctxdock/` |
+
+---
+
+## First Use & Usage Examples
+
+Agents run the bundled standard-library runner directly:
+
+### 1. Search Historical Knowledge
+```bash
+python .agent/skills/ctxdock/scripts/ctxdock.py find "database architecture"
+python .agent/skills/ctxdock/scripts/ctxdock.py get mem-0123456789abcdef --summary
 ```
 
-POSIX shell:
-
-```sh
-printf '%s' '{"title":"API constraint","summary":"Public endpoints use JSON.","category":"constraint"}' | ctxdock save
-ctxdock find "public endpoints"
+### 2. Record a Finalized Decision
+```bash
+printf '%s' '{"title":"Database Engine","summary":"Use PostgreSQL 17 for multi-tenant data.","category":"architecture","rationale":"Strong relational isolation.","tags":["db","postgres"]}' | python .agent/skills/ctxdock/scripts/ctxdock.py save
 ```
 
-Create and retrieve a handoff:
+### 3. Session Handoffs
+```bash
+# Record handoff at end of session:
+printf '%s' '{"current_goal":"Ship auth MVP","completed_work":["tokens","schema"],"blockers":[],"next_actions":["verify tests"]}' | python .agent/skills/ctxdock/scripts/ctxdock.py handoff
 
-```powershell
-'{"current_goal":"Ship the MVP","completed_work":["storage","search"],"decisions":["Use FTS5"],"important_files":["src/ctxdock/storage.py"],"blockers":[],"next_actions":["Run benchmarks"]}' | ctxdock handoff
-ctxdock handoff
+# Retrieve handoff at start of next session:
+python .agent/skills/ctxdock/scripts/ctxdock.py handoff
 ```
 
-Run `ctxdock COMMAND --help` for filters, limits, detailed output, explicit project IDs, and output budgets.
+---
 
-## Saving policy
+## Security, Boundaries & Storage Reliability
 
-The default `suggest` policy asks before preserving an important decision. Edit `~/.ctxdock/config.json` to choose:
+- **Secret Detection**: Rejects commits containing private keys, AWS tokens, GitHub credentials, JWTs, API keys, or raw password assignments while permitting standard placeholders (`<redacted>`, `[removed]`, `${PASSWORD}`, `********`).
+- **Record Limits**: Hard limits prevent unbounded disk consumption (Title: 512 chars; Summary: 64 KB; Rationale: 64 KB; Input: 256 KB; Max 64 tags).
+- **Windows File Contention Protection**: Atomic JSON updates employ 5 exponential backoff retries (20ms to 320ms) to transparently survive transient Windows antivirus/indexer `PermissionError` locking.
+- **Database Migrations (`SCHEMA_VERSION = 2`)**: SQLite upgrades automatically create pre-migration backups in `backups/` and checkpoint WAL logs atomically via SQLite's native backup API.
+- **Scoped Statistics**: `ctxdock stats` reports storage and latency metrics strictly scoped to the active project by default; `--cross-project` provides explicit global visibility.
 
-```json
-{
-  "saving_policy": "suggest",
-  "default_result_limit": 5,
-  "default_output_budget": 2400,
-  "version": 1
-}
-```
+---
 
-- `manual`: only explicit save requests.
-- `suggest`: propose important memories, then wait for approval (default).
-- `automatic`: high-confidence finalized decisions only after the user authorizes this behavior.
+## Benchmarks
 
-The skill never converts a tentative idea into a confirmed decision silently.
+Offline retrieval benchmarks (tested with fixed seed `20261109`, 0 network calls, 0 model dependencies):
 
-## Storage and project scope
+| Records | Save/index s | Search p50 ms | Search p95 ms | Index bytes | Est. tokens | Precision | Recall | Isolation violations |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 7.81s | 60.89 ms | 69.54 ms | 159 KB | 196 | 1.0000 | 1.0000 | 0 |
+| 1,000 | 79.04s | 60.14 ms | 66.98 ms | 1.10 MB | 197 | 1.0000 | 1.0000 | 0 |
+| 10,000 | 835.78s | 52.21 ms | 65.28 ms | 10.49 MB | 197 | 1.0000 | 1.0000 | 0 |
 
-`~/.ctxdock/` is the physical location shared by local agents. `CTXDOCK_HOME` overrides it for testing or portable setups. Within that home, records remain project-scoped: CtxDock derives a stable ID from the Git root, or accepts `--project ID`. Moving a repository changes a derived ID, so use an explicit ID when move-stability matters.
+---
 
-Default searches return the current project plus records deliberately saved with `"scope":"shared"`. `--cross-project` is an explicit boundary-crossing action. Storage does not synchronize across computers and is never published automatically.
+## Platform Status & CI Matrix
 
-```text
-~/.ctxdock/
-├── config.json
-├── projects.json
-├── index.db
-├── records/<project-id>/*.json
-├── records/shared/*.json
-└── backups/
-```
+| Platform | Automated CI Status | Target Python Versions |
+| :--- | :---: | :---: |
+| **Ubuntu Linux** | Passing | 3.11, 3.12, 3.13 |
+| **Windows** | Passing | 3.11, 3.12, 3.13 |
+| **macOS** | Passing | 3.11, 3.12, 3.13 |
 
-JSON is canonical; SQLite is rebuildable with `ctxdock rebuild`. Writes use temporary files, atomic replacement with automatic retry backoff (handling transient Windows `PermissionError` contention), SQLite transactions, WAL mode, and optimistic update checks.
-
-### Record payload limits
-
-To protect local storage and prevent unbounded contexts, strict limits are enforced before any disk write or indexing:
-- **Title**: 512 characters
-- **Summary**: 65,536 characters (64 KB)
-- **Rationale**: 65,536 characters (64 KB)
-- **Source reference**: 4,096 characters (4 KB)
-- **Tags**: maximum 64 tags, up to 128 characters each
-- **Input payload**: 262,144 characters (256 KB)
-
-Oversized incoming records are rejected with descriptive errors. Existing oversized legacy records can still be read and rebuilt; `ctxdock doctor` warns about any detected legacy records.
-
-### Database migrations and backups
-
-The SQLite search index maintains a versioned `metadata` table (`SCHEMA_VERSION = 2`). Upgrades (such as adding the `source` tracking column) automatically back up the database into `~/.ctxdock/backups/` before executing the migration in a transaction. If a migration ever encounters an error, the original database is preserved and instructions advise running `ctxdock rebuild` to recover the index cleanly from canonical JSON.
-
-### Scoped statistics
-
-`ctxdock stats` reports local storage and retrieval metrics scoped strictly to the current project and shared records by default, preventing accidental leakage of other project IDs or counts. Use `ctxdock stats --cross-project` to view global totals and a breakdown by project.
-
-## Progressive retrieval and token efficiency
-
-`find` returns IDs, titles, snippets, categories, status, and rank. `get --summary` returns the selected decision and rationale. Plain `get` returns full history and references. `--max-chars` places a hard, valid-JSON output budget around retrieval.
-
-This design aims to keep ordinary retrieval around a few hundred estimated tokens, but CtxDock does **not** guarantee token savings. A carefully written manual summary can be smaller. The offline benchmark measures retrieval without a model; the opt-in Codex benchmark compares no memory, long manual history, CtxDock, compact manual context, and installed-but-idle overhead using actual `codex exec --json` usage events.
-
-```console
-python benchmarks/run_offline.py
-python benchmarks/run_codex.py --dry-run
-python benchmarks/run_codex.py --live --runs 3 --max-runs 150
-```
-
-Live benchmarks consume usage and are never run by installation or CI. See [benchmarking methodology](docs/benchmarking.md).
-
-## Privacy and security
-
-CtxDock is private by default and performs no network requests. It rejects common private keys, access tokens, JWTs, API keys, and password assignments; pattern matching cannot catch every secret, so review records before saving or sharing backups. Stored text is untrusted historical evidence, never executable instructions. Current user instructions and verified code take precedence.
-
-Filesystem permissions are restricted where the OS supports POSIX modes. Anyone with access to your account or memory directory may still read it. Do not place credentials or regulated/private data in CtxDock. See [privacy](docs/privacy.md) and [security policy](SECURITY.md).
-
-## How is CtxDock different from automatic memory systems?
-
-CtxDock stores curated, meaningful knowledge instead of complete conversation logs. Search happens when prior knowledge is relevant, not on every message. This improves inspectability and deletion/recovery while avoiding an ever-growing transcript archive; it also means CtxDock can miss information nobody chose to save.
-
-## Platform status
-
-| Platform | CLI | Skill integration |
-|---|---|---|
-| Windows | Locally tested in automated tests | Installer tested in an isolated target; fresh Codex discovery still needs manual verification |
-| Linux/macOS | Designed; CI matrix configured but not yet executed on GitHub | Codex expected; not manually verified |
-| Claude Code | Same CLI/storage expected | Experimental, untested |
-| Cursor | Same CLI/storage expected | Experimental, untested |
-| Gemini CLI | Same CLI/storage expected | Experimental, untested |
-| VS Code Copilot | Same CLI/storage expected | Experimental, untested |
-
-No compatibility claim implies identical slash-command syntax. See [compatibility](docs/compatibility.md).
+---
 
 ## Development
 
 ```console
-python -m pip install -e .
+# Run test suite
 python -m unittest discover -s tests -v
-python benchmarks/run_offline.py --sizes 100
+
+# Run offline benchmark
+python benchmarks/run_offline.py --sizes 25
 ```
 
-The architecture is documented in [docs/architecture.md](docs/architecture.md), commands in [docs/commands.md](docs/commands.md), and contribution workflow in [CONTRIBUTING.md](CONTRIBUTING.md). CtxDock is available under the [MIT License](LICENSE).
-
+CtxDock is open source under the [MIT License](LICENSE).

@@ -30,7 +30,17 @@ DEFAULT_CONFIG = {
 
 def default_home() -> Path:
     override = os.environ.get("CTXDOCK_HOME")
-    return Path(override).expanduser() if override else Path.home() / ".ctxdock"
+    if override:
+        return Path(override).expanduser()
+    try:
+        current = Path.cwd().resolve()
+        for parent in [current, *current.parents]:
+            local_candidate = parent / ".ctxdock"
+            if local_candidate.is_dir():
+                return local_candidate
+    except Exception:
+        pass
+    return Path.home() / ".ctxdock"
 
 
 def _atomic_json(path: Path, value: Any) -> None:
