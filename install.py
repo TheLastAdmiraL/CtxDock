@@ -171,6 +171,22 @@ def main() -> int:
             cursor_file = cursor_home_dir / "ctxdock.mdc"
             cursor_file.write_text(CURSOR_RULE_CONTENT.format(script_path=global_script), encoding="utf-8")
             installed_locations.append(f"Global Cursor (~/.cursor/rules/ctxdock.mdc): {cursor_file}")
+            cursor_skills = home / ".cursor" / "skills" / "ctxdock"
+            install_skill_copy(cursor_skills)
+            installed_locations.append(f"Global Cursor (~/.cursor/skills/ctxdock): {cursor_skills}")
+
+        if install_all or "claude" in agent_list:
+            claude_home = home / ".claude"
+            if claude_home.exists():
+                claude_skills = claude_home / "skills" / "ctxdock"
+                install_skill_copy(claude_skills)
+                installed_locations.append(f"Global Claude Code (~/.claude/skills/ctxdock): {claude_skills}")
+                claude_md = claude_home / "CLAUDE.md"
+                content = claude_md.read_text(encoding="utf-8") if claude_md.exists() else ""
+                if "CtxDock" not in content:
+                    with claude_md.open("a", encoding="utf-8") as f:
+                        f.write(CLAUDE_MD_SNIPPET.format(script_path=global_script))
+                installed_locations.append(f"Global Claude Code (~/.claude/CLAUDE.md): {claude_md}")
 
         if install_all or "gemini" in agent_list:
             gemini_global = home / ".gemini" / "skills" / "ctxdock"
