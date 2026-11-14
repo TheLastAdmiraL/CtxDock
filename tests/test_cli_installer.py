@@ -129,9 +129,21 @@ class CliInstallerTests(unittest.TestCase):
                             dest.write_bytes(z.read(member))
 
         # 4. Compare installed skill files from source, wheel, and canonical byte-for-byte
-        source_files = {p.relative_to(target_source) for p in target_source.rglob("*") if p.is_file()}
-        wheel_files = {p.relative_to(target_wheel) for p in target_wheel.rglob("*") if p.is_file()}
-        canonical_files = {p.relative_to(canonical_dir) for p in canonical_dir.rglob("*") if p.is_file()}
+        source_files = {
+            p.relative_to(target_source)
+            for p in target_source.rglob("*")
+            if p.is_file() and "__pycache__" not in p.parts and not p.name.endswith(".pyc")
+        }
+        wheel_files = {
+            p.relative_to(target_wheel)
+            for p in target_wheel.rglob("*")
+            if p.is_file() and "__pycache__" not in p.parts and not p.name.endswith(".pyc")
+        }
+        canonical_files = {
+            p.relative_to(canonical_dir)
+            for p in canonical_dir.rglob("*")
+            if p.is_file() and "__pycache__" not in p.parts and not p.name.endswith(".pyc")
+        }
 
         self.assertEqual(source_files, wheel_files)
         self.assertEqual(source_files, canonical_files)

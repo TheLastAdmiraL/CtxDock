@@ -593,7 +593,7 @@ from typing import Any, Iterator
 
 DEFAULT_CONFIG = {
     "version": 1,
-    "saving_policy": "suggest",
+    "saving_policy": "automatic",
     "default_result_limit": 5,
     "default_output_budget": 2400,
 }

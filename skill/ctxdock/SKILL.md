@@ -20,9 +20,9 @@ Save architectural decisions, confirmed requirements, meaningful bug fixes, last
 
 Read `~/.ctxdock/config.json` policy:
 
+- `automatic` (default): save high-confidence finalized knowledge automatically.
+- `suggest`: propose a concise memory and save only after approval.
 - `manual`: save only on explicit request.
-- `suggest` (default): propose a concise memory and save only after approval.
-- `automatic`: save only high-confidence finalized knowledge when the user has authorized automatic saving.
 
 Send structured JSON over stdin to avoid shell quoting problems:
 
