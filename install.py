@@ -15,9 +15,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-STANDALONE_SOURCE = ROOT / "marketplace" / "agensi"
-if not STANDALONE_SOURCE.exists():
-    STANDALONE_SOURCE = ROOT / "skill" / "ctxdock"
+STANDALONE_SOURCE = ROOT / "skill" / "ctxdock"
 
 CURSOR_RULE_CONTENT = """---
 description: Project memory for architecture decisions, constraints, and handoffs

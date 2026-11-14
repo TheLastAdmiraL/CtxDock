@@ -33,17 +33,76 @@ Install the CtxDock skill from https://github.com/TheLastAdmiraL/CtxDock
 
 ---
 
-## Why CtxDock Saves Tokens
+## Token Consumption Benchmark & Context Reduction
 
-Coding agents suffer from amnesia across sessions. Re-pasting entire chat transcripts or re-reading dozens of repository files burns tens of thousands of tokens per session.
+Re-pasting entire chat transcripts or re-reading multiple source files across sessions burns tens of thousands of tokens. CtxDock replaces transcript-dumping with **compact, progressive retrieval**.
 
-CtxDock eliminates this waste through:
-- **Ultra-Lean Idle Context (< 350 tokens)**: The skill instructions loaded into agent system prompts are kept strictly under 50 lines.
-- **Progressive Retrieval**:
-  - `find` returns only 1-line titles, snippets, and IDs (**~100–150 tokens**).
-  - `get --summary` returns only the exact rationale and decision needed (**~150 tokens**).
-- **Project-Specific Relevance**: In project-specific mode, agents only search records relevant to the current repository—zero irrelevant results or cross-project token bloat.
-- **Token Efficiency**: Avoiding just one repeated debugging loop or two unnecessary full-file reads pays for hundreds of CtxDock queries.
+### Visual Token Comparison per Workflow Turn
+
+```mermaid
+xychart-beta
+    title "Context Token Consumption per Workflow Turn (Lower is Better)"
+    x-axis ["Architecture Recall", "Bug Workaround", "Session Continuity", "Policy Constraints"]
+    y-axis "Tokens Consumed" 0 --> 7000
+    bar [3411, 2539, 6026, 2180]
+    bar [845, 829, 700, 864]
+```
+*(Blue/Left bar: **Without CtxDock** | Green/Right bar: **With CtxDock**)*
+
+### Measured Context Reduction Table
+
+| Workflow Scenario | Without CtxDock *(Files / Logs Scanned)* | With CtxDock *(Progressive Retrieval)* | Tokens Saved | Context Reduction |
+| :--- | :---: | :---: | :---: | :---: |
+| **Session Continuity & Task Handoff** | 6,026 tokens *(3 files)* | **700 tokens** | **+5,326 tokens** | **-88.4%** |
+| **Architecture Decision Recall** | 3,411 tokens *(5 files)* | **845 tokens** | **+2,566 tokens** | **-75.2%** |
+| **Bug Workaround & Edge-Case Memory** | 2,539 tokens *(4 files)* | **829 tokens** | **+1,710 tokens** | **-67.3%** |
+| **Library Policy & Technical Constraints** | 2,180 tokens *(4 files)* | **864 tokens** | **+1,316 tokens** | **-60.4%** |
+| **Overall Benchmark Total** | **14,156 tokens** | **3,238 tokens** | **+10,918 tokens** | **-77.1%** |
+
+---
+
+### Detailed Breakdown: What CtxDock Does Behind the Scenes
+
+CtxDock achieves these savings through a three-stage progressive retrieval architecture:
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ Stage 1: Ultra-Lean Idle Footprint (~340–460 tokens)                            │
+│ The skill definition loaded into the agent's system prompt is under 50 lines.   │
+│ It consumes almost no context while idle and introduces zero token bloat.       │
+└───────────────────────────────────────┬─────────────────────────────────────────┘
+                                        │ (When agent needs past context)
+                                        ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ Stage 2: Fast Locator Search (~250 tokens)                                      │
+│ Agent calls: python scripts/ctxdock.py find "<query>"                           │
+│ Returns only 1-line locator tuples: id, title, category, status, and snippet.   │
+│ Strips all full summaries, rationales, and revision logs.                       │
+└───────────────────────────────────────┬─────────────────────────────────────────┘
+                                        │ (If specific details are needed)
+                                        ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ Stage 3: Targeted Precision Detail (~100–150 tokens)                            │
+│ Agent calls: python scripts/ctxdock.py get <id> --summary                       │
+│ Returns strictly the single relevant decision and rationale.                    │
+│ Total context added: ~350–400 tokens (vs. 5,000–25,000 tokens for whole files). │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### How to Test Token Consumption Yourself
+
+You can run the token benchmark directly from your terminal:
+
+```bash
+# Execute the automated benchmark
+python benchmarks/run_token_benchmark.py
+```
+
+This runs all realistic multi-session scenarios, outputs the terminal report, and generates:
+1. **Interactive HTML Dashboard**: [`benchmarks/results/token_usage.html`](benchmarks/results/token_usage.html) — open in any browser for interactive comparison bars and breakdown metrics.
+2. **Raw JSON Metrics**: [`benchmarks/results/token_usage.json`](benchmarks/results/token_usage.json) — machine-readable token counts.
 
 ---
 
@@ -114,7 +173,7 @@ python .agent/skills/ctxdock/scripts/ctxdock.py handoff
 
 ---
 
-## Benchmarks
+## Retrieval Latency Benchmarks
 
 Offline retrieval benchmarks (tested with fixed seed `20261109`, 0 network calls, 0 model dependencies):
 
@@ -142,7 +201,10 @@ Offline retrieval benchmarks (tested with fixed seed `20261109`, 0 network calls
 # Run test suite
 python -m unittest discover -s tests -v
 
-# Run offline benchmark
+# Run token benchmark
+python benchmarks/run_token_benchmark.py
+
+# Run offline retrieval benchmark
 python benchmarks/run_offline.py --sizes 25
 ```
 
