@@ -83,7 +83,7 @@ CtxDock operates in three lightweight stages so that an agent never ingests more
 ```
 
 > [!NOTE]
-> **Token Economics Notice**: Actual token savings depend entirely on what context you would have provided otherwise. CtxDock bounds active retrieval payloads to ~$O(1)$ tool calls, but does not claim guaranteed financial savings over a concise, hand-crafted prompt.
+> **Token Economics Notice**: Actual token savings depend entirely on what context you would have provided otherwise. CtxDock bounds active retrieval payloads to compact `O(1)` tool calls, but does not claim guaranteed financial savings over a concise, hand-crafted prompt.
 
 ---
 
